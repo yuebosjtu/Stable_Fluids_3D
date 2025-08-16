@@ -8,18 +8,18 @@ int main()
 {
     // Create 3D simulation parameters with spherical source
     FluidSimulator3D::SimulationParams params;
-    params.width = 64;
-    params.height = 64;
-    params.depth = 64;
+    params.width = 128;
+    params.height = 256;
+    params.depth = 128;
     params.dt = 0.1f;
     params.total_time = 100.0f;
     params.enable_gravity = false;  // Disable gravity to see pure source effect
-    params.pressure_iterations = 800;
+    params.pressure_iterations = 600;
 
     // Configure spherical source in lower part of domain
-    params.source_center_x = 32.0f;
-    params.source_center_y = 16.0f;
-    params.source_center_z = 32.0f;
+    params.source_center_x = 64.0f;
+    params.source_center_y = 32.0f;
+    params.source_center_z = 64.0f;
     params.source_radius = 8.0f;        // 8 grid units radius
     params.source_velocity_x = 0.0f;    // No horizontal velocity
     params.source_velocity_y = 5.0f;    // Upward velocity magnitude

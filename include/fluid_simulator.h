@@ -255,7 +255,7 @@ private:
     /**
      * @brief Save velocity field as VTK file for 3D visualization
      */
-    void SaveVelocityFieldVTK(const std::string& image_dir, int current_frame);
+    void SaveVelocityFieldImage(const std::string& image_dir, const std::vector<Vector3f>& velocity_field, int current_frame);
 };
 
 #endif // FLUID_SIMULATOR_3D_H

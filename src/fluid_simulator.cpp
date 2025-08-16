@@ -1,4 +1,5 @@
 #include "fluid_simulator.h"
+#include "../visualize/colorramp.h"
 #include <iostream>
 #include <iomanip>
 #include <cmath>
@@ -172,12 +173,15 @@ void FluidSimulator3D::Step(const std::string& image_dir)
     
     // 2. Advect velocity field
     AdvectVelocity(params_.advect_method_);
-    
+    std::cout << "Velocity field advected." << std::endl;
+
     // 3. Diffuse velocity field (viscosity)
     DiffuseVelocity();
-    
+    std::cout << "Velocity field diffused." << std::endl;
+
     // 4. Project - Solve pressure to ensure incompressibility
     SolvePressure();
+    std::cout << "Pressure field solved." << std::endl;
     
     // Advect and diffuse dye field
     AdvectDye();
@@ -314,12 +318,10 @@ void FluidSimulator3D::AdvectVelocity(AdvectMethod method)
                                         params_.dt);
             break;
         case AdvectMethod::MacCormack:
-            // For now, use semi-Lagrangian as MacCormack is more complex in 3D
-            advection_velocity_3d<float>(params_.width, params_.height, params_.depth,
+            macCormackVelocity_3d<float>(params_.width, params_.height, params_.depth,
                                         u_pair_->cur, v_pair_->cur, w_pair_->cur,
                                         u_pair_->nxt, v_pair_->nxt, w_pair_->nxt,
                                         params_.dt);
-            
             break;
         default:
             std::cerr << "Unknown advection method!" << std::endl;
@@ -361,42 +363,16 @@ void FluidSimulator3D::DissipateDye()
 
 void FluidSimulator3D::SaveFrameData(const std::string& image_dir)
 {
-    // Save velocity field data (sample at cell centers)
-    for (int k = 0; k < params_.depth; ++k) {
-        for (int j = 0; j < params_.height; ++j) {
-            for (int i = 0; i < params_.width; ++i) {
-                int idx = IXYZ(i, j, k, params_.width, params_.height);
-                
-                // Average velocities to get cell center values
-                float u_left = u_field_[IXYZ(i, j, k, params_.width + 1, params_.height)];
-                float u_right = u_field_[IXYZ(i + 1, j, k, params_.width + 1, params_.height)];
-                float u_avg = 0.5f * (u_left + u_right);
-                
-                float v_bottom = v_field_[IXYZ(i, j, k, params_.width, params_.height + 1)];
-                float v_top = v_field_[IXYZ(i, j + 1, k, params_.width, params_.height + 1)];
-                float v_avg = 0.5f * (v_bottom + v_top);
-                
-                float w_back = w_field_[IXYZ(i, j, k, params_.width, params_.height)];
-                float w_front = w_field_[IXYZ(i, j, k + 1, params_.width, params_.height)];
-                float w_avg = 0.5f * (w_back + w_front);
-                
-                velocity_file_ << current_frame_ << " " << current_time_ << " "
-                              << i << " " << j << " " << k << " "
-                              << u_avg << " " << v_avg << " " << w_avg << std::endl;
-                
-                pressure_file_ << current_frame_ << " " << current_time_ << " "
-                              << i << " " << j << " " << k << " "
-                              << pressure_field_[idx] << std::endl;
-                
-                dye_file_ << current_frame_ << " " << current_time_ << " "
-                         << i << " " << j << " " << k << " "
-                         << dye_field_[idx] << std::endl;
-            }
-        }
-    }
+    if (!velocity_file_.is_open() || !pressure_file_.is_open() || !dye_file_.is_open())
+        return;
+
+    const std::vector<Vector3f>& velocity_field = GetVelocityField();
+    const std::vector<float>& pressure_field = pressure_pair_->cur;
+    const std::vector<float>& dye_field = dye_pair_->cur;
     
-    // Save VTK file for 3D visualization
-    SaveVelocityFieldVTK(image_dir, current_frame_);
+    // TODO: save data to file
+    
+    SaveVelocityFieldImage(image_dir, velocity_field, current_frame_);
     
     save_frame_++;
 }
@@ -513,72 +489,132 @@ void FluidSimulator3D::ApplyInsideSource()
     }
 }
 
-void FluidSimulator3D::SaveVelocityFieldVTK(const std::string& image_dir, int current_frame)
+
+void FluidSimulator3D::SaveVelocityFieldImage(const std::string& image_dir, const std::vector<Vector3f>& velocity_field, int current_frame)
 {
-    std::string filename = image_dir + "/velocity_" + std::to_string(current_frame) + ".vtk";
-    std::ofstream vtk_file(filename.c_str());
-    
-    if (!vtk_file.is_open()) {
-        std::cerr << "Cannot open VTK file: " << filename << std::endl;
-        return;
-    }
-    
-    // VTK header
-    vtk_file << "# vtk DataFile Version 3.0" << std::endl;
-    vtk_file << "3D Fluid Simulation" << std::endl;
-    vtk_file << "ASCII" << std::endl;
-    vtk_file << "DATASET STRUCTURED_POINTS" << std::endl;
-    vtk_file << "DIMENSIONS " << params_.width << " " << params_.height << " " << params_.depth << std::endl;
-    vtk_file << "ORIGIN 0 0 0" << std::endl;
-    vtk_file << "SPACING 1 1 1" << std::endl;
-    vtk_file << "POINT_DATA " << (params_.width * params_.height * params_.depth) << std::endl;
-    
-    // Velocity field
-    vtk_file << "VECTORS velocity float" << std::endl;
-    for (int k = 0; k < params_.depth; ++k) {
-        for (int j = 0; j < params_.height; ++j) {
-            for (int i = 0; i < params_.width; ++i) {
-                // Average velocities to get cell center values
-                float u_left = u_field_[IXYZ(i, j, k, params_.width + 1, params_.height)];
-                float u_right = u_field_[IXYZ(i + 1, j, k, params_.width + 1, params_.height)];
-                float u_avg = 0.5f * (u_left + u_right);
-                
-                float v_bottom = v_field_[IXYZ(i, j, k, params_.width, params_.height + 1)];
-                float v_top = v_field_[IXYZ(i, j + 1, k, params_.width, params_.height + 1)];
-                float v_avg = 0.5f * (v_bottom + v_top);
-                
-                float w_back = w_field_[IXYZ(i, j, k, params_.width, params_.height)];
-                float w_front = w_field_[IXYZ(i, j, k + 1, params_.width, params_.height)];
-                float w_avg = 0.5f * (w_back + w_front);
-                
-                vtk_file << u_avg << " " << v_avg << " " << w_avg << std::endl;
-            }
+    using namespace Mfree;
+    // 可视化xy、xz、yz三个截面
+    // 1. xy平面（z = depth / 2）
+    int z_xy = params_.depth / 2;
+    std::vector<float> rgb_xy(params_.width * params_.height * 3);
+    ColorRamp color_ramp;
+    float max_v_xy = 0.0f;
+    for (int j = 0; j < params_.height; ++j) {
+        for (int i = 0; i < params_.width; ++i) {
+            int idx = IXYZ(i, j, z_xy, params_.width, params_.height);
+            float vx = velocity_field[idx](0);
+            float vy = velocity_field[idx](1);
+            float mag = std::sqrt(vx * vx + vy * vy);
+            max_v_xy = std::max(max_v_xy, mag);
         }
     }
-    
-    // Pressure field
-    vtk_file << "SCALARS pressure float 1" << std::endl;
-    vtk_file << "LOOKUP_TABLE default" << std::endl;
-    for (int k = 0; k < params_.depth; ++k) {
-        for (int j = 0; j < params_.height; ++j) {
-            for (int i = 0; i < params_.width; ++i) {
-                int idx = IXYZ(i, j, k, params_.width, params_.height);
-                vtk_file << pressure_field_[idx] << std::endl;
-            }
+    if (max_v_xy < 1e-6f) max_v_xy = 1.0f;
+    for (int j = 0; j < params_.height; ++j) {
+        for (int i = 0; i < params_.width; ++i) {
+            int idx = IXYZ(i, j, z_xy, params_.width, params_.height);
+            int rgb_id = ((params_.height - 1 - j) * params_.width + i) * 3;
+            float vx = velocity_field[idx](0);
+            float vy = velocity_field[idx](1);
+            float mag = std::sqrt(vx * vx + vy * vy) / max_v_xy;
+            vec3 color(0, 0, 0);
+            color_ramp.set_GLcolor(mag, COLOR_JET, color, false);
+            rgb_xy[rgb_id] = color.x;
+            rgb_xy[rgb_id + 1] = color.y;
+            rgb_xy[rgb_id + 2] = color.z;
         }
     }
-    
-    // Dye field
-    vtk_file << "SCALARS dye float 1" << std::endl;
-    vtk_file << "LOOKUP_TABLE default" << std::endl;
+    std::string dir_xy = image_dir + "/xy_slice";
+    _mkdir(dir_xy.c_str());
+    char filename_xy[512];
+    sprintf(filename_xy, "%s/velocity_xy_frame_%05d.ppm", dir_xy.c_str(), current_frame);
+    std::ofstream ppm_xy(filename_xy, std::ios::out | std::ios::binary);
+    if (ppm_xy.is_open()) {
+        ppm_xy << "P6\n" << params_.width << " " << params_.height << "\n255\n";
+        for (int i = 0; i < params_.width * params_.height * 3; ++i) {
+            ppm_xy << (unsigned char)(rgb_xy[i] * 255);
+        }
+        ppm_xy.close();
+    }
+
+    // 2. xz平面（y = height / 2）
+    int y_xz = params_.height / 2;
+    std::vector<float> rgb_xz(params_.width * params_.depth * 3);
+    float max_v_xz = 0.0f;
     for (int k = 0; k < params_.depth; ++k) {
-        for (int j = 0; j < params_.height; ++j) {
-            for (int i = 0; i < params_.width; ++i) {
-                int idx = IXYZ(i, j, k, params_.width, params_.height);
-                vtk_file << dye_field_[idx] << std::endl;
-            }
+        for (int i = 0; i < params_.width; ++i) {
+            int idx = IXYZ(i, y_xz, k, params_.width, params_.height);
+            float vx = velocity_field[idx](0);
+            float vz = velocity_field[idx](2);
+            float mag = std::sqrt(vx * vx + vz * vz);
+            max_v_xz = std::max(max_v_xz, mag);
         }
     }
-    
-    vtk_file.close();
+    if (max_v_xz < 1e-6f) max_v_xz = 1.0f;
+    for (int k = 0; k < params_.depth; ++k) {
+        for (int i = 0; i < params_.width; ++i) {
+            int idx = IXYZ(i, y_xz, k, params_.width, params_.height);
+            int rgb_id = ((params_.depth - 1 - k) * params_.width + i) * 3;
+            float vx = velocity_field[idx](0);
+            float vz = velocity_field[idx](2);
+            float mag = std::sqrt(vx * vx + vz * vz) / max_v_xz;
+            vec3 color(0, 0, 0);
+            color_ramp.set_GLcolor(mag, COLOR_JET, color, false);
+            rgb_xz[rgb_id] = color.x;
+            rgb_xz[rgb_id + 1] = color.y;
+            rgb_xz[rgb_id + 2] = color.z;
+        }
+    }
+    std::string dir_xz = image_dir + "/xz_slice";
+    _mkdir(dir_xz.c_str());
+    char filename_xz[512];
+    sprintf(filename_xz, "%s/velocity_xz_frame_%05d.ppm", dir_xz.c_str(), current_frame);
+    std::ofstream ppm_xz(filename_xz, std::ios::out | std::ios::binary);
+    if (ppm_xz.is_open()) {
+        ppm_xz << "P6\n" << params_.width << " " << params_.depth << "\n255\n";
+        for (int i = 0; i < params_.width * params_.depth * 3; ++i) {
+            ppm_xz << (unsigned char)(rgb_xz[i] * 255);
+        }
+        ppm_xz.close();
+    }
+
+    // 3. yz平面（x = width / 2）
+    int x_yz = params_.width / 2;
+    std::vector<float> rgb_yz(params_.height * params_.depth * 3);
+    float max_v_yz = 0.0f;
+    for (int k = 0; k < params_.depth; ++k) {
+        for (int j = 0; j < params_.height; ++j) {
+            int idx = IXYZ(x_yz, j, k, params_.width, params_.height);
+            float vy = velocity_field[idx](1);
+            float vz = velocity_field[idx](2);
+            float mag = std::sqrt(vy * vy + vz * vz);
+            max_v_yz = std::max(max_v_yz, mag);
+        }
+    }
+    if (max_v_yz < 1e-6f) max_v_yz = 1.0f;
+    for (int k = 0; k < params_.depth; ++k) {
+        for (int j = 0; j < params_.height; ++j) {
+            int idx = IXYZ(x_yz, j, k, params_.width, params_.height);
+            int rgb_id = ((params_.depth - 1 - k) * params_.height + j) * 3;
+            float vy = velocity_field[idx](1);
+            float vz = velocity_field[idx](2);
+            float mag = std::sqrt(vy * vy + vz * vz) / max_v_yz;
+            vec3 color(0, 0, 0);
+            color_ramp.set_GLcolor(mag, COLOR_JET, color, false);
+            rgb_yz[rgb_id] = color.x;
+            rgb_yz[rgb_id + 1] = color.y;
+            rgb_yz[rgb_id + 2] = color.z;
+        }
+    }
+    std::string dir_yz = image_dir + "/yz_slice";
+    _mkdir(dir_yz.c_str());
+    char filename_yz[512];
+    sprintf(filename_yz, "%s/velocity_yz_frame_%05d.ppm", dir_yz.c_str(), current_frame);
+    std::ofstream ppm_yz(filename_yz, std::ios::out | std::ios::binary);
+    if (ppm_yz.is_open()) {
+        ppm_yz << "P6\n" << params_.height << " " << params_.depth << "\n255\n";
+        for (int i = 0; i < params_.height * params_.depth * 3; ++i) {
+            ppm_yz << (unsigned char)(rgb_yz[i] * 255);
+        }
+        ppm_yz.close();
+    }
 }
